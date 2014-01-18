@@ -11,7 +11,7 @@ Pod::Spec.new do |s|
   s.default_subspec = 'Core'
 
   s.ios.deployment_target = '5.0'
-  s.osx.deployment_target = '10.8'
+  s.osx.deployment_target = '10.7'
   
   s.subspec 'Core' do |subspec|
     subspec.dependency 'SocketRocket', "0.3.1-beta2"
