@@ -1,3 +1,32 @@
+# 1.6.3 - March 2017
+
+* Fix `PTURLRequestOperation` memory leak (#246)
+* Ensure socket IDs still match before proceeding with subscription (#237)
+
+# 1.6.2 - September 2016
+
+* Added option to unsubscribe from all channels without knowing their names (#200)
+* PTPusherEventReceivedNotification gets posted at correct point (#192)
+* NSURLSession replaced NSURLConnection
+* OHHTTPStubs to version 5.1.0
+* Check and cast presence channel user id to NSString (#193)
+* Expose channels reference to see what channels are currently subscribed (#197)
+
+# 1.6.1 - September 2015
+
+* Update SocketRocket to 0.4.1 (#181)
+* Update Gemfile to use more recent version of Cocoapods
+* Changed iOS deployment target to 6.0
+
+# 1.6 - March 2015
+
+* Swift and 64-bit compatibility
+* Added new delegate method to support extracting auth response from wrapped payloads (#171)
+* Removed deprecated methods and delegate calls
+* Removed SocketRocket from the public interface (#157)
+* Fix deprecation warning for willAuthorizeChannelWithRequest (#147)
+* Use NSDate instead of C API for setting timestamp on auth request (#133)
+
 # 1.5 - December 2013
 
 This release contains some significant bug fixes and API changes. All deprecated API in this release will be removed in the next release after this one.

@@ -1,33 +1,50 @@
 PODS:
-  - Kiwi (2.2.3):
-    - Kiwi/SenTestingKit
-  - Kiwi/ARC (2.2.3)
-  - Kiwi/NonARC (2.2.3)
-  - Kiwi/SenTestingKit (2.2.3):
-    - Kiwi/ARC
-    - Kiwi/NonARC
-  - OHHTTPStubs (3.0.2)
-  - Reachability (3.1.1)
-  - ReactiveCocoa (2.1.7):
+  - Kiwi (2.4.0)
+  - OHHTTPStubs (5.1.0):
+    - OHHTTPStubs/Default (= 5.1.0)
+  - OHHTTPStubs/Core (5.1.0)
+  - OHHTTPStubs/Default (5.1.0):
+    - OHHTTPStubs/Core
+    - OHHTTPStubs/JSON
+    - OHHTTPStubs/NSURLSession
+    - OHHTTPStubs/OHPathHelpers
+  - OHHTTPStubs/JSON (5.1.0):
+    - OHHTTPStubs/Core
+  - OHHTTPStubs/NSURLSession (5.1.0):
+    - OHHTTPStubs/Core
+  - OHHTTPStubs/OHPathHelpers (5.1.0)
+  - Reachability (3.2)
+  - ReactiveCocoa (2.5):
+    - ReactiveCocoa/UI (= 2.5)
+  - ReactiveCocoa/Core (2.5):
+    - ReactiveCocoa/no-arc
+  - ReactiveCocoa/no-arc (2.5)
+  - ReactiveCocoa/UI (2.5):
     - ReactiveCocoa/Core
-    - ReactiveCocoa/no-arc
-  - ReactiveCocoa/Core (2.1.7):
-    - ReactiveCocoa/no-arc
-  - ReactiveCocoa/no-arc (2.1.7)
-  - SocketRocket (0.3.1-beta2)
+  - SocketRocket (0.5.1)
 
 DEPENDENCIES:
-  - Kiwi (~> 2.2)
-  - OHHTTPStubs (~> 3.0)
+  - Kiwi (~> 2.4)
+  - OHHTTPStubs (~> 5.0)
   - Reachability (~> 3.1)
   - ReactiveCocoa (~> 2.1)
-  - SocketRocket (= 0.3.1-beta2)
+  - SocketRocket (~> 0.5.0)
+
+SPEC REPOS:
+  https://github.com/cocoapods/specs.git:
+    - Kiwi
+    - OHHTTPStubs
+    - Reachability
+    - ReactiveCocoa
+    - SocketRocket
 
 SPEC CHECKSUMS:
-  Kiwi: 04c51e880831d291748ec702d42c4101f7eb95c9
-  OHHTTPStubs: 7be864a1c40c6a5007fe3e8679c109ca45590803
-  Reachability: be4883bb93f31e38266ae3365e5600a317aae735
-  ReactiveCocoa: 1117f7968c8667d2ca00b5aa47156fabcb56af75
-  SocketRocket: 7ac946bcce46287a791dfff3c1f8daa692821dae
+  Kiwi: f49c9d54b28917df5928fe44968a39ed198cb8a8
+  OHHTTPStubs: 592f74439d2d72615115cf99a954237a3fbe26e5
+  Reachability: 33e18b67625424e47b6cde6d202dce689ad7af96
+  ReactiveCocoa: e2db045570aa97c695e7aa97c2bcab222ae51f4a
+  SocketRocket: d57c7159b83c3c6655745cd15302aa24b6bae531
 
-COCOAPODS: 0.28.0
+PODFILE CHECKSUM: 61da03ba9b95e949d53763ad14de13019054f1e9
+
+COCOAPODS: 1.5.3

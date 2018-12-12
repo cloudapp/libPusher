@@ -44,7 +44,10 @@ static NSTimeInterval const kSlotTime = 0.25; // Must be >0. We will send a chun
 @interface OHHTTPStubs()
 + (instancetype)sharedInstance;
 @property(atomic, copy) NSMutableArray* stubDescriptors;
-@property(atomic, copy) void (^onStubActivationBlock)(NSURLRequest*, id<OHHTTPStubsDescriptor>);
+@property(atomic, assign) BOOL enabledState;
+@property(atomic, copy, nullable) void (^onStubActivationBlock)(NSURLRequest*, id<OHHTTPStubsDescriptor>, OHHTTPStubsResponse*);
+@property(atomic, copy, nullable) void (^onStubRedirectBlock)(NSURLRequest*, NSURLRequest*, id<OHHTTPStubsDescriptor>, OHHTTPStubsResponse*);
+@property(atomic, copy, nullable) void (^afterStubFinishBlock)(NSURLRequest*, id<OHHTTPStubsDescriptor>, OHHTTPStubsResponse*, NSError*);
 @end
 
 @interface OHHTTPStubsDescriptor : NSObject <OHHTTPStubsDescriptor>
@@ -101,29 +104,27 @@ static NSTimeInterval const kSlotTime = 0.25; // Must be >0. We will send a chun
 ////////////////////////////////////////////////////////////////////////////////
 #pragma mark - Setup & Teardown
 
-extern void _OHHTTPStubs_InstallNSURLSessionConfigurationMagicSupport();
-
 + (void)initialize
 {
     if (self == [OHHTTPStubs class])
     {
-        [self setEnabled:YES];
-        _OHHTTPStubs_InstallNSURLSessionConfigurationMagicSupport();
+        [self _setEnable:YES];
     }
 }
-- (id)init
+- (instancetype)init
 {
     self = [super init];
     if (self)
     {
         _stubDescriptors = [NSMutableArray array];
+        _enabledState = YES; // assume initialize has already been run
     }
     return self;
 }
 
 - (void)dealloc
 {
-    [self.class setEnabled:NO];
+    [self.class _setEnable:NO];
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -144,10 +145,7 @@ extern void _OHHTTPStubs_InstallNSURLSessionConfigurationMagicSupport();
 {
     return [OHHTTPStubs.sharedInstance removeStub:stubDesc];
 }
-+(void)removeLastStub
-{
-    [OHHTTPStubs.sharedInstance removeLastStub];
-}
+
 +(void)removeAllStubs
 {
     [OHHTTPStubs.sharedInstance removeAllStubs];
@@ -155,22 +153,29 @@ extern void _OHHTTPStubs_InstallNSURLSessionConfigurationMagicSupport();
 
 #pragma mark > Disabling & Re-Enabling stubs
 
-+(void)setEnabled:(BOOL)enable
++(void)_setEnable:(BOOL)enable
 {
-    static BOOL currentEnabledState = NO;
-    if (enable && !currentEnabledState)
+    if (enable)
     {
         [NSURLProtocol registerClass:OHHTTPStubsProtocol.class];
     }
-    else if (!enable && currentEnabledState)
+    else
     {
         [NSURLProtocol unregisterClass:OHHTTPStubsProtocol.class];
     }
-    currentEnabledState = enable;
 }
 
-#if (defined(__IPHONE_OS_VERSION_MAX_ALLOWED) && __IPHONE_OS_VERSION_MAX_ALLOWED >= 70000) \
- || (defined(__MAC_OS_X_VERSION_MAX_ALLOWED) && __MAC_OS_X_VERSION_MAX_ALLOWED >= 1090)
++(void)setEnabled:(BOOL)enabled
+{
+    [OHHTTPStubs.sharedInstance setEnabled:enabled];
+}
+
++(BOOL)isEnabled
+{
+    return OHHTTPStubs.sharedInstance.isEnabled;
+}
+
+#if defined(__IPHONE_7_0) || defined(__MAC_10_9)
 + (void)setEnabled:(BOOL)enable forSessionConfiguration:(NSURLSessionConfiguration*)sessionConfig
 {
     // Runtime check to make sure the API is available on this version
@@ -181,9 +186,9 @@ extern void _OHHTTPStubs_InstallNSURLSessionConfigurationMagicSupport();
         Class protoCls = OHHTTPStubsProtocol.class;
         if (enable && ![urlProtocolClasses containsObject:protoCls])
         {
-            [urlProtocolClasses addObject:protoCls];
+            [urlProtocolClasses insertObject:protoCls atIndex:0];
         }
-        else if (!enable  && [urlProtocolClasses containsObject:protoCls])
+        else if (!enable && [urlProtocolClasses containsObject:protoCls])
         {
             [urlProtocolClasses removeObject:protoCls];
         }
@@ -191,7 +196,28 @@ extern void _OHHTTPStubs_InstallNSURLSessionConfigurationMagicSupport();
     }
     else
     {
-        NSLog(@"[OHHTTPStubs] %@ is only available when running on iOS7+. Use conditions like 'if ([NSURLSessionConfiguration class])' to only call this method if the user is running iOS7+.", NSStringFromSelector(_cmd));
+        NSLog(@"[OHHTTPStubs] %@ is only available when running on iOS7+/OSX9+. "
+              @"Use conditions like 'if ([NSURLSessionConfiguration class])' to only call "
+              @"this method if the user is running iOS7+/OSX9+.", NSStringFromSelector(_cmd));
+    }
+}
+
++ (BOOL)isEnabledForSessionConfiguration:(NSURLSessionConfiguration *)sessionConfig
+{
+    // Runtime check to make sure the API is available on this version
+    if (   [sessionConfig respondsToSelector:@selector(protocolClasses)]
+        && [sessionConfig respondsToSelector:@selector(setProtocolClasses:)])
+    {
+        NSMutableArray * urlProtocolClasses = [NSMutableArray arrayWithArray:sessionConfig.protocolClasses];
+        Class protoCls = OHHTTPStubsProtocol.class;
+        return [urlProtocolClasses containsObject:protoCls];
+    }
+    else
+    {
+        NSLog(@"[OHHTTPStubs] %@ is only available when running on iOS7+/OSX9+. "
+              @"Use conditions like 'if ([NSURLSessionConfiguration class])' to only call "
+              @"this method if the user is running iOS7+/OSX9+.", NSStringFromSelector(_cmd));
+        return NO;
     }
 }
 #endif
@@ -203,15 +229,44 @@ extern void _OHHTTPStubs_InstallNSURLSessionConfigurationMagicSupport();
     return [OHHTTPStubs.sharedInstance stubDescriptors];
 }
 
-+(void)onStubActivation:( void(^)(NSURLRequest* request, id<OHHTTPStubsDescriptor> stub) )block
++(void)onStubActivation:( nullable void(^)(NSURLRequest* request, id<OHHTTPStubsDescriptor> stub, OHHTTPStubsResponse* responseStub) )block
 {
     [OHHTTPStubs.sharedInstance setOnStubActivationBlock:block];
+}
+
++(void)onStubRedirectResponse:( nullable void(^)(NSURLRequest* request, NSURLRequest* redirectRequest, id<OHHTTPStubsDescriptor> stub, OHHTTPStubsResponse* responseStub) )block
+{
+    [OHHTTPStubs.sharedInstance setOnStubRedirectBlock:block];
+}
+
++(void)afterStubFinish:( nullable void(^)(NSURLRequest* request, id<OHHTTPStubsDescriptor> stub, OHHTTPStubsResponse* responseStub, NSError* error) )block
+{
+    [OHHTTPStubs.sharedInstance setAfterStubFinishBlock:block];
 }
 
 
 
 ////////////////////////////////////////////////////////////////////////////////
 #pragma mark - Private instance methods
+
+-(BOOL)isEnabled
+{
+    BOOL enabled = NO;
+    @synchronized(self)
+    {
+        enabled = _enabledState;
+    }
+    return enabled;
+}
+
+-(void)setEnabled:(BOOL)enable
+{
+    @synchronized(self)
+    {
+        _enabledState = enable;
+        [self.class _setEnable:_enabledState];
+    }
+}
 
 -(void)addStub:(OHHTTPStubsDescriptor*)stubDesc
 {
@@ -230,14 +285,6 @@ extern void _OHHTTPStubs_InstallNSURLSessionConfigurationMagicSupport();
         [_stubDescriptors removeObject:stubDesc];
     }
     return handlerFound;
-}
-
--(void)removeLastStub
-{
-    @synchronized(_stubDescriptors)
-    {
-        [_stubDescriptors removeLastObject];
-    }
 }
 
 -(void)removeAllStubs
@@ -280,7 +327,10 @@ extern void _OHHTTPStubs_InstallNSURLSessionConfigurationMagicSupport();
 #pragma mark - Private Protocol Class
 
 @interface OHHTTPStubsProtocol()
-@property(nonatomic, assign) BOOL stopped;
+@property(assign) BOOL stopped;
+@property(strong) OHHTTPStubsDescriptor* stub;
+@property(assign) CFRunLoopRef clientRunLoop;
+- (void)executeOnClientRunLoopAfterDelay:(NSTimeInterval)delayInSeconds block:(dispatch_block_t)block;
 @end
 
 @implementation OHHTTPStubsProtocol
@@ -293,7 +343,9 @@ extern void _OHHTTPStubs_InstallNSURLSessionConfigurationMagicSupport();
 - (id)initWithRequest:(NSURLRequest *)request cachedResponse:(NSCachedURLResponse *)response client:(id<NSURLProtocolClient>)client
 {
     // Make super sure that we never use a cached response.
-    return [super initWithRequest:request cachedResponse:nil client:client];
+    OHHTTPStubsProtocol* proto = [super initWithRequest:request cachedResponse:nil client:client];
+    proto.stub = [OHHTTPStubs.sharedInstance firstStubPassingTestForRequest:request];
+    return proto;
 }
 
 + (NSURLRequest *)canonicalRequestForRequest:(NSURLRequest *)request
@@ -308,20 +360,38 @@ extern void _OHHTTPStubs_InstallNSURLSessionConfigurationMagicSupport();
 
 - (void)startLoading
 {
+    self.clientRunLoop = CFRunLoopGetCurrent();
     NSURLRequest* request = self.request;
-	id<NSURLProtocolClient> client = self.client;
+    id<NSURLProtocolClient> client = self.client;
     
-    OHHTTPStubsDescriptor* stub = [OHHTTPStubs.sharedInstance firstStubPassingTestForRequest:request];
-    NSAssert(stub, @"At the time startLoading is called, canInitRequest should have assured that stub is != nil beforehand");
-    OHHTTPStubsResponse* responseStub = stub.responseBlock(request);
-
+    if (!self.stub)
+    {
+        NSDictionary* userInfo = [NSDictionary dictionaryWithObjectsAndKeys:
+                                  @"It seems like the stub has been removed BEFORE the response had time to be sent.",
+                                  NSLocalizedFailureReasonErrorKey,
+                                  @"For more info, see https://github.com/AliSoftware/OHHTTPStubs/wiki/OHHTTPStubs-and-asynchronous-tests",
+                                  NSLocalizedRecoverySuggestionErrorKey,
+                                  request.URL, // Stop right here if request.URL is nil
+                                  NSURLErrorFailingURLErrorKey,
+                                  nil];
+        NSError* error = [NSError errorWithDomain:@"OHHTTPStubs" code:500 userInfo:userInfo];
+        [client URLProtocol:self didFailWithError:error];
+        if (OHHTTPStubs.sharedInstance.afterStubFinishBlock)
+        {
+            OHHTTPStubs.sharedInstance.afterStubFinishBlock(request, self.stub, nil, error);
+        }
+        return;
+    }
+    
+    OHHTTPStubsResponse* responseStub = self.stub.responseBlock(request);
+    
     if (OHHTTPStubs.sharedInstance.onStubActivationBlock)
     {
-        OHHTTPStubs.sharedInstance.onStubActivationBlock(request, stub);
+        OHHTTPStubs.sharedInstance.onStubActivationBlock(request, self.stub, responseStub);
     }
     
     if (responseStub.error == nil)
-    {        
+    {
         NSHTTPURLResponse* urlResponse = [[NSHTTPURLResponse alloc] initWithURL:request.URL
                                                                      statusCode:responseStub.statusCode
                                                                     HTTPVersion:@"HTTP/1.1"
@@ -348,51 +418,64 @@ extern void _OHHTTPStubs_InstallNSURLSessionConfigurationMagicSupport();
         {
             redirectLocationURL = nil;
         }
-        if (((responseStub.statusCode >= 300) && (responseStub.statusCode < 400)) && redirectLocationURL)
+        // Notify if a redirection occurred
+        if (((responseStub.statusCode > 300) && (responseStub.statusCode < 400)) && redirectLocationURL)
         {
             NSURLRequest* redirectRequest = [NSURLRequest requestWithURL:redirectLocationURL];
-            execute_after(responseStub.requestTime, ^{
+            [self executeOnClientRunLoopAfterDelay:responseStub.requestTime block:^{
                 if (!self.stopped)
                 {
                     [client URLProtocol:self wasRedirectedToRequest:redirectRequest redirectResponse:urlResponse];
-                }
-            });
-        }
-        else
-        {
-            execute_after(responseStub.requestTime,^{
-                if (!self.stopped)
-                {
-                    [client URLProtocol:self didReceiveResponse:urlResponse cacheStoragePolicy:NSURLCacheStorageNotAllowed];
-                    if(responseStub.inputStream.streamStatus == NSStreamStatusNotOpen)
+                    if (OHHTTPStubs.sharedInstance.onStubRedirectBlock)
                     {
-                        [responseStub.inputStream open];
+                        OHHTTPStubs.sharedInstance.onStubRedirectBlock(request, redirectRequest, self.stub, responseStub);
                     }
-                    [self streamDataForClient:client
-                             withStubResponse:responseStub
-                                   completion:^(NSError * error)
-                     {
-                         [responseStub.inputStream close];
-                         if (error==nil)
-                         {
-                             [client URLProtocolDidFinishLoading:self];
-                         }
-                         else
-                         {
-                             [client URLProtocol:self didFailWithError:responseStub.error];
-                         }
-                     }];
                 }
-            });
+            }];
         }
+        // Send the response (even for redirections)
+        [self executeOnClientRunLoopAfterDelay:responseStub.requestTime block:^{
+            if (!self.stopped)
+            {
+                [client URLProtocol:self didReceiveResponse:urlResponse cacheStoragePolicy:NSURLCacheStorageNotAllowed];
+                if(responseStub.inputStream.streamStatus == NSStreamStatusNotOpen)
+                {
+                    [responseStub.inputStream open];
+                }
+                [self streamDataForClient:client
+                         withStubResponse:responseStub
+                               completion:^(NSError * error)
+                 {
+                     [responseStub.inputStream close];
+                     NSError *blockError = nil;
+                     if (error==nil)
+                     {
+                         [client URLProtocolDidFinishLoading:self];
+                     }
+                     else
+                     {
+                         [client URLProtocol:self didFailWithError:responseStub.error];
+                         blockError = responseStub.error;
+                     }
+                     if (OHHTTPStubs.sharedInstance.afterStubFinishBlock)
+                     {
+                         OHHTTPStubs.sharedInstance.afterStubFinishBlock(request, self.stub, responseStub, blockError);
+                     }
+                 }];
+            }
+        }];
     } else {
         // Send the canned error
-        execute_after(responseStub.responseTime, ^{
+        [self executeOnClientRunLoopAfterDelay:responseStub.responseTime block:^{
             if (!self.stopped)
             {
                 [client URLProtocol:self didFailWithError:responseStub.error];
+                if (OHHTTPStubs.sharedInstance.afterStubFinishBlock)
+                {
+                    OHHTTPStubs.sharedInstance.afterStubFinishBlock(request, self.stub, responseStub, responseStub.error);
+                }
             }
-        });
+        }];
     }
 }
 
@@ -411,7 +494,7 @@ typedef struct {
            withStubResponse:(OHHTTPStubsResponse*)stubResponse
                  completion:(void(^)(NSError * error))completion
 {
-    if (stubResponse.inputStream.hasBytesAvailable && !self.stopped)
+    if ((stubResponse.dataSize>0) && stubResponse.inputStream.hasBytesAvailable && (!self.stopped))
     {
         // Compute timing data once and for all for this stub
         
@@ -458,7 +541,7 @@ typedef struct {
 {
     NSParameterAssert(timingInfo.chunkSizePerSlot > 0);
     
-    if (inputStream.hasBytesAvailable && !self.stopped)
+    if (inputStream.hasBytesAvailable && (!self.stopped))
     {
         // This is needed in case we computed a non-integer chunkSizePerSlot, to avoid cumulative errors
         double cumulativeChunkSizeAfterRead = timingInfo.cumulativeChunkSize + timingInfo.chunkSizePerSlot;
@@ -468,23 +551,23 @@ typedef struct {
         if (chunkSizeToRead == 0)
         {
             // Nothing to read at this pass, but probably later
-            execute_after(timingInfo.slotTime, ^{
+            [self executeOnClientRunLoopAfterDelay:timingInfo.slotTime block:^{
                 [self streamDataForClient:client fromStream:inputStream
                                timingInfo:timingInfo completion:completion];
-            });
+            }];
         } else {
-            uint8_t buffer[chunkSizeToRead];
+            uint8_t* buffer = (uint8_t*)malloc(sizeof(uint8_t)*chunkSizeToRead);
             NSInteger bytesRead = [inputStream read:buffer maxLength:chunkSizeToRead];
             if (bytesRead > 0)
             {
                 NSData * data = [NSData dataWithBytes:buffer length:bytesRead];
                 // Wait for 'slotTime' seconds before sending the chunk.
                 // If bytesRead < chunkSizePerSlot (because we are near the EOF), adjust slotTime proportionally to the bytes remaining
-                execute_after(((double)bytesRead / (double)chunkSizeToRead) * timingInfo.slotTime, ^{
+                [self executeOnClientRunLoopAfterDelay:((double)bytesRead / (double)chunkSizeToRead) * timingInfo.slotTime block:^{
                     [client URLProtocol:self didLoadData:data];
                     [self streamDataForClient:client fromStream:inputStream
                                    timingInfo:timingInfo completion:completion];
-                });
+                }];
             }
             else
             {
@@ -496,6 +579,7 @@ typedef struct {
                     completion(inputStream.streamError);
                 }
             }
+            free(buffer);
         }
     }
     else
@@ -511,10 +595,13 @@ typedef struct {
 // Delayed execution utility methods
 /////////////////////////////////////////////
 
-static void execute_after(NSTimeInterval delayInSeconds, dispatch_block_t block)
+- (void)executeOnClientRunLoopAfterDelay:(NSTimeInterval)delayInSeconds block:(dispatch_block_t)block
 {
     dispatch_time_t popTime = dispatch_time(DISPATCH_TIME_NOW, (int64_t)(delayInSeconds * NSEC_PER_SEC));
-    dispatch_after(popTime, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), block);
+    dispatch_after(popTime, dispatch_get_global_queue(DISPATCH_QUEUE_PRIORITY_DEFAULT, 0), ^{
+        CFRunLoopPerformBlock(self.clientRunLoop, kCFRunLoopDefaultMode, block);
+        CFRunLoopWakeUp(self.clientRunLoop);
+    });
 }
 
 @end

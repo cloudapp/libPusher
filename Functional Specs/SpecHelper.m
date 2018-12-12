@@ -10,6 +10,7 @@
 #import "Constants.h"
 #import "PTPusherAPI.h"
 #import "PTPusherMockConnection.h"
+#import "PTPusherChannelServerBasedAuthorization.h"
 
 PTPusher *newTestClient(void) {
   PTPusher *client = newTestClientDisconnected();
@@ -22,12 +23,20 @@ PTPusher *newTestClientWithMockConnection(void)
   PTPusherMockConnection *mockConnection = [[PTPusherMockConnection alloc] init];
   PTPusher *client = [[PTPusher alloc] initWithConnection:mockConnection];
   client.delegate = [PTPusherClientTestHelperDelegate sharedInstance];
-  return [client retain];
+  return client;
 }
 
 PTPusher *newTestClientDisconnected(void) {
-  PTPusher *client = [PTPusher pusherWithKey:PUSHER_API_KEY delegate:[PTPusherClientTestHelperDelegate sharedInstance] encrypted:NO];
-  return [client retain];
+  NSDictionary *environment = [[NSProcessInfo processInfo] environment];
+  NSString *appKey = environment[@"PUSHER_API_KEY"];
+
+  if (!appKey) {
+    NSCAssert(![PUSHER_API_KEY isEqualToString:@""], @"You must supply a Pusher app key");
+    appKey = PUSHER_API_KEY;
+  }
+
+  PTPusher *client = [PTPusher pusherWithKey:appKey delegate:[PTPusherClientTestHelperDelegate sharedInstance] encrypted:NO];
+  return client;
 }
 
 void enableClientDebugging(void)
@@ -42,13 +51,31 @@ void sendTestEvent(NSString *eventName)
 
 void sendTestEventOnChannel(NSString *channelName, NSString *eventName)
 {
+  NSDictionary *environment = [[NSProcessInfo processInfo] environment];
+  NSString *appId = environment[@"PUSHER_APP_ID"];
+  NSString *appKey = environment[@"PUSHER_API_KEY"];
+  NSString *appSecret = environment[@"PUSHER_API_SECRET"];
+
+  if (!appId) {
+    NSCAssert(![PUSHER_APP_ID isEqualToString:@""], @"You must supply a Pusher app ID");
+    appId = PUSHER_APP_ID;
+  }
+  if (!appKey) {
+    NSCAssert(![PUSHER_API_KEY isEqualToString:@""], @"You must supply a Pusher app key");
+    appKey = PUSHER_API_KEY;
+  }
+  if (!appSecret) {
+    NSCAssert(![PUSHER_API_SECRET isEqualToString:@""], @"You must supply a Pusher app secret");
+    appSecret = PUSHER_API_SECRET;
+  }
+
   __strong static PTPusherAPI *_sharedAPI = nil;
   static dispatch_once_t onceToken;
   dispatch_once(&onceToken, ^{
-    _sharedAPI = [[PTPusherAPI alloc] initWithKey:PUSHER_API_KEY appID:PUSHER_APP_ID secretKey:PUSHER_API_SECRET];
+    _sharedAPI = [[PTPusherAPI alloc] initWithKey:appKey appID:appId secretKey:appSecret];
   });
-  
-  [_sharedAPI triggerEvent:eventName onChannel:channelName data:[NSArray arrayWithObject:@"dummy data"] socketID:@"99999"];
+
+  [_sharedAPI triggerEvent:eventName onChannel:channelName data:[NSArray arrayWithObject:@"dummy data"] socketID:@"99999.99999"];
 }
 
 void onConnect(dispatch_block_t block)
@@ -131,7 +158,6 @@ void waitForClientToDisconnect(PTPusher *client)
     block();
   }
   else {
-    [connectedBlock release];
     connectedBlock = [block copy];
   }
 }
@@ -165,21 +191,19 @@ void waitForClientToDisconnect(PTPusher *client)
   }
   if (connectedBlock) {
     connectedBlock();
-
-    [connectedBlock release]; connectedBlock = nil;
+    connectedBlock = nil;
   }
   connected = YES;
 }
 
-- (void)pusher:(PTPusher *)pusher connectionDidDisconnect:(PTPusherConnection *)connection
+- (void)pusher:(PTPusher *)pusher connection:(PTPusherConnection *)connection didDisconnectWithError:(NSError *)error willAttemptReconnect:(BOOL)willAttemptReconnect
 {
   if (self.debugEnabled) {
     NSLog(@"[DEBUG] Client disconnected");
   }
   if (disconnectedBlock) {
     disconnectedBlock();
-    
-    [disconnectedBlock release]; disconnectedBlock = nil;
+    disconnectedBlock = nil;
   }
   connected = NO;
   connectedBlock = nil;
@@ -198,10 +222,10 @@ void waitForClientToDisconnect(PTPusher *client)
   onSubscribeBlock = nil;
 }
 
-- (void)pusher:(PTPusher *)pusher willAuthorizeChannelWithRequest:(NSMutableURLRequest *)request
+- (void)pusher:(PTPusher *)pusher willAuthorizeChannel:(PTPusherChannel *)channel withAuthOperation:(PTPusherChannelAuthorizationOperation *)operation
 {
   if (onAuthorizationBlock) {
-    onAuthorizationBlock(request);
+    onAuthorizationBlock(operation.mutableURLRequest);
   }
 }
 
@@ -240,14 +264,8 @@ void waitForClientToDisconnect(PTPusher *client)
   return self;
 }
 
-- (void)dealloc 
-{
-  [observers release];
-  [super dealloc];
-}
-
-- (void)addObserverForNotificationName:(NSString *)notificationName object:(id)object 
-                    notificationCentre:(NSNotificationCenter *)notificationCenter 
+- (void)addObserverForNotificationName:(NSString *)notificationName object:(id)object
+                    notificationCentre:(NSNotificationCenter *)notificationCenter
                              withBlock:(void (^)(NSNotification *))block
 {
   [observers setObject:[block copy] forKey:notificationName];
@@ -257,7 +275,7 @@ void waitForClientToDisconnect(PTPusher *client)
 - (void)handleNotification:(NSNotification *)note
 {
   void (^block)(NSNotification *) = [observers objectForKey:note.name];
-  
+
   if (block) {
     block(note);
   }
